@@ -54,10 +54,6 @@ async function saveTracks(aggregatedTracks) {
     TRACKS_FILE,
     JSON.stringify(aggregatedTracks, null, 2)
   );
-
-  console.log(
-    `💾 Saved ${aggregatedResults.length} episodes on ${TRACKS_FILE} (aggregated format)`
-  );
 }
 
 async function exportNewTracks(tracks) {
@@ -227,8 +223,13 @@ async function main() {
     `🎧 Found **${newTracks.length}** new tracks (total: ${allTracks.length})`
   );
 
-  const aggregatedResults = aggregateTracksByEpisode(allTracks);
+  const aggregatedResults = await aggregateTracksByEpisode(allTracks);
   await saveTracks(aggregatedResults);
+  
+  console.log(
+    `💾 Saved ${aggregatedResults.length} episodes on ${TRACKS_FILE} (aggregated format)`
+  );
+
   await exportNewTracks(newTracks);
 }
 
