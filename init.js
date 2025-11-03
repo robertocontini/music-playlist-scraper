@@ -12,8 +12,8 @@ const BASE_URL = "https://www.raiplaysound.it";
 const BATTITI_URL = `${BASE_URL}/programmi/battiti`;
 const EPISODE_SELECTOR = "rps-cta-link[weblink]";
 const EPISODE_TITLE_SELECTOR = ".audio__header__title";
-const EPISODE_DESCRIPTION_SELECTOR = ".audio__header p";
 const EPISODE_DATE_SELECTOR = ".audio__header p.text-gray-medium";
+const EPISODE_DESCRIPTION_SELECTOR = ".audio__header p";
 
 async function loadPreviousTracks() {
   try {
@@ -21,21 +21,17 @@ async function loadPreviousTracks() {
     const data = await fsPromises.readFile(TRACKS_FILE, "utf-8");
     const aggregatedData = JSON.parse(data);
 
-    if (
-      Array.isArray(aggregatedData) &&
-      aggregatedData.length > 0 &&
-      aggregatedData[0].tracks
-    ) {
+    if (Array.isArray(aggregatedData) && aggregatedData.length > 0) {
       const flatTracks = [];
       aggregatedData.forEach((episode) => {
         episode.tracks.forEach((track) => {
           flatTracks.push({
             title: track.title,
             artist: track.artist,
-            albumDetails: track.albumDetails || "",
             episodeTitle: episode.episodeTitle,
             episodeUrl: episode.episodeUrl,
             date: episode.date,
+            albumDetails: track.albumDetails || "",
           });
         });
       });
@@ -44,7 +40,7 @@ async function loadPreviousTracks() {
 
     return aggregatedData;
   } catch (e) {
-    console.error("❌ Error on loading tracks.json:", e);
+    console.error("❌ Error on loading tracks.json:", e.message);
     return [];
   }
 }
@@ -53,6 +49,10 @@ async function saveTracks(aggregatedTracks) {
   await fsPromises.writeFile(
     TRACKS_FILE,
     JSON.stringify(aggregatedTracks, null, 2)
+  );
+
+  console.log(
+    `💾 Saved ${aggregatedTracks.length} episodes to ${TRACKS_FILE} (aggregated format)`
   );
 }
 
@@ -64,22 +64,21 @@ async function exportNewTracks(tracks) {
 
   const cleanedContent = tracks
     .map((t) => {
-      const cleanedTitle = t.title
-        .replace(/ \(([^)]+)\)/g, "") // Remove (feat. X), (Live), (Remix)
-        .replace(/ \[([^\]]+)\]/g, "") // Remove [feat. X], [Live], [Remix]
-        .trim();
+      const clean = (str) =>
+        str
+          .replace(/ \(([^)]+)\)/g, "")
+          .replace(/ \[([^\]]+)\]/g, "")
+          .trim();
 
-      const cleanedArtist = t.artist
-        .replace(/ \(([^)]+)\)/g, "")
-        .replace(/ \[([^\]]+)\]/g, "")
-        .trim();
+      const cleanedTitle = clean(t.title);
+      const cleanedArtist = clean(t.artist);
 
       return `${cleanedArtist} - ${cleanedTitle}`;
     })
     .join("\n");
 
   await fsPromises.writeFile(EXPORT_FILE, cleanedContent);
-  console.log(`✅ ${tracks.lenght} tracks exported.`);
+  console.log(`✅ ${tracks.length} tracks exported to ${EXPORT_FILE}.`);
 }
 
 function aggregateTracksByEpisode(tracks) {
@@ -92,7 +91,7 @@ function aggregateTracksByEpisode(tracks) {
       episodesMap.set(key, {
         episodeTitle: track.episodeTitle,
         episodeUrl: track.episodeUrl,
-        date: track.date,
+        date: track.date || "Unknown",
         tracks: [],
       });
     }
@@ -141,15 +140,14 @@ function parseTrackString(trackStr) {
     rawTitle = rawTitle.replace(albumRegex, "").trim();
   }
 
-  const title = rawTitle.trim();
+  const title = rawTitle.trim().replace(/^["']|["']$/g, "");
   const artist = artistPart.trim();
-  const cleanedTitle = title.replace(/^["']|["']$/g, "");
 
-  if (!artist || !cleanedTitle || cleanedTitle.length < 5) {
+  if (!artist || title.length < 5) {
     return null;
   }
 
-  return { title: cleanedTitle, artist, albumDetails };
+  return { title, artist, albumDetails };
 }
 
 async function getTracksFromEpisode(episodeUrl) {
@@ -181,7 +179,6 @@ async function getTracksFromEpisode(episodeUrl) {
     .filter(Boolean);
 }
 
-// --- Main ---
 async function main() {
   console.log(`🎧 Start scraping ${BATTITI_URL}`);
 
@@ -191,16 +188,41 @@ async function main() {
   let allTracks = [...previousTracks];
   let newTracks = [];
   let scrapedCount = 0;
+  let skippedCount = 0;
 
+  // 🟢 1. SPEED OPTIMIZATION: Create a Set of known episode URLs for O(1) lookup
+  const aggregatedHistory = aggregateTracksByEpisode(previousTracks);
+  const knownEpisodeUrls = new Set(
+    aggregatedHistory.map((ep) => ep.episodeUrl)
+  );
+
+  let isNewEpisodeFound = false;
+
+  // 🟢 2. INCREMENTAL LOOP: Process links from newest to oldest
   for (const link of episodeLinks) {
+    if (knownEpisodeUrls.has(link)) {
+      skippedCount++;
+
+      // INTERRUPT LOGIC: If we've found new episodes AND we now hit old ones, break.
+      if (isNewEpisodeFound || skippedCount > 10) {
+        console.log(
+          `\n⏭️ Found known episode (${link}). Stopping incremental analysis.`
+        );
+        break;
+      }
+
+      continue; // Skip processing this episode's details
+    }
+
+    // If the episode URL is unknown, it's new.
+    isNewEpisodeFound = true;
+
     try {
       const episodeTracks = await getTracksFromEpisode(link);
       scrapedCount++;
-      for (const track of episodeTracks) {
-        // const exists = allTracks.some(
-        //   (t) => t.title === track.title && t.episodeUrl === track.episodeUrl
-        // );
 
+      for (const track of episodeTracks) {
+        // ANTI-DUPLICATE LOGIC: Check uniqueness based on Artist + Title only
         const exists = allTracks.some(
           (t) =>
             t.title.trim() === track.title.trim() &&
@@ -213,24 +235,23 @@ async function main() {
         }
       }
     } catch (e) {
-      console.error(`❌ Error on getting the episode ${link}:`, e.message);
+      console.error(`❌ Error during episode processing ${link}:`, e.message);
     }
   }
 
   console.log(`---`);
-  console.log(`✅ Episodes analyzed: ${scrapedCount}/${episodeLinks.length}`);
   console.log(
-    `🎧 Found **${newTracks.length}** new tracks (total: ${allTracks.length})`
+    `✅ Episodes analyzed: ${scrapedCount}/${episodeLinks.length} (Skipped: ${skippedCount})`
+  );
+  console.log(
+    `🎧 Found **${newTracks.length}** new tracks (total historical: ${allTracks.length})`
   );
 
-  const aggregatedResults = await aggregateTracksByEpisode(allTracks);
+  const aggregatedResults = aggregateTracksByEpisode(allTracks);
   await saveTracks(aggregatedResults);
-  
-  console.log(
-    `💾 Saved ${aggregatedResults.length} episodes on ${TRACKS_FILE} (aggregated format)`
-  );
-
   await exportNewTracks(newTracks);
 }
 
-main().catch((err) => console.error("❌ General error:", err.message || err));
+main().catch((err) =>
+  console.error("❌ General error in the application:", err.message || err)
+);
