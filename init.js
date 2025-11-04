@@ -1,7 +1,4 @@
-import dotenv from "dotenv";
-dotenv.config();
-
-import { loadPreviousTracks, saveTracks, exportNewTracks } from "./lib/fileHandler.js";
+import { loadPreviousTracks, saveTracks, exportNewTracks, ensureDataDirectory } from "./lib/fileHandler.js";
 import { getEpisodeLinks, getTracksFromEpisode } from "./lib/scraper.js";
 import { aggregateTracksByEpisode } from "./lib/parser.js";
 import { updateAllTracks, getKnownEpisodeUrls } from "./lib/aggregation.js";
@@ -11,6 +8,8 @@ import { TRACKS_FILE, EXPORT_FILE, BATTITI_URL, SKIPPED_COUNT_LIMIT } from "./li
 
 async function main() {
     logStart(BATTITI_URL);
+
+    await ensureDataDirectory();
 
     const previousTracks = await loadPreviousTracks(TRACKS_FILE);
     const episodeLinks = await getEpisodeLinks(BATTITI_URL); 
